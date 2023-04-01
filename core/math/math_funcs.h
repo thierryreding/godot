@@ -240,6 +240,24 @@ public:
 	static _ALWAYS_INLINE_ double rad_to_deg(double p_y) { return p_y * (180.0 / Math_PI); }
 	static _ALWAYS_INLINE_ float rad_to_deg(float p_y) { return p_y * (float)(180.0 / Math_PI); }
 
+	static _ALWAYS_INLINE_ float normalize_angle(float angle) {
+		angle = ::fmodf(angle, Math_PI * 2);
+		if (angle < -Math_PI)
+			return angle + Math_PI * 2;
+		if (angle > Math_PI)
+			return angle - Math_PI * 2;
+		return angle;
+	}
+
+	static _ALWAYS_INLINE_ double normalize_angle(double angle) {
+		angle = ::fmod(angle, Math_PI * 2);
+		if (angle < -Math_PI)
+			return angle + Math_PI * 2;
+		if (angle > Math_PI)
+			return angle - Math_PI * 2;
+		return angle;
+	}
+
 	static _ALWAYS_INLINE_ double lerp(double p_from, double p_to, double p_weight) { return p_from + (p_to - p_from) * p_weight; }
 	static _ALWAYS_INLINE_ float lerp(float p_from, float p_to, float p_weight) { return p_from + (p_to - p_from) * p_weight; }
 

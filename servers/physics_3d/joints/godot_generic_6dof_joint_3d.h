@@ -32,8 +32,8 @@
 #define GODOT_GENERIC_6DOF_JOINT_3D_H
 
 /*
-Adapted to Godot from the Bullet library.
-*/
+ * Adapted to Godot from the Bullet library.
+ */
 
 #include "servers/physics_3d/godot_joint_3d.h"
 #include "servers/physics_3d/joints/godot_jacobian_entry_3d.h"
@@ -53,91 +53,156 @@ subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 */
 
-/*
-2007-09-09
-GodotGeneric6DOFJoint3D Refactored by Francisco Le?n
-email: projectileman@yahoo.com
-http://gimpact.sf.net
-*/
+enum RotateOrder {
+	RO_XYZ = 0,
+	RO_XZY,
+	RO_YXZ,
+	RO_YZX,
+	RO_ZXY,
+	RO_ZYX,
+};
 
-//! Rotation Limit structure for generic joints
 class GodotG6DOFRotationalLimitMotor3D {
 public:
-	//! limit_parameters
-	//!@{
-	real_t m_loLimit = -1e30; //!< joint limit
-	real_t m_hiLimit = 1e30; //!< joint limit
+	// upper < lower means free
+	// upper == lower means locked
+	// upper > lower means limited
+	real_t m_loLimit = -1e30;
+	real_t m_hiLimit = 1e30;
+	real_t m_bounce = 0.0;
+	real_t m_stopERP = 0.5;
+	real_t m_stopCFM;
+	real_t m_motorERP;
+	real_t m_motorCFM;
+	bool m_enableMotor;
 	real_t m_targetVelocity = 0.0; //!< target motor velocity
 	real_t m_maxMotorForce = 0.1; //!< max force on motor
-	real_t m_maxLimitForce = 300.0; //!< max force on limit
-	real_t m_damping = 1.0; //!< Damping.
-	real_t m_limitSoftness = 0.5; //! Relaxation factor
-	real_t m_ERP = 0.5; //!< Error tolerance factor when joint is at limit
-	real_t m_bounce = 0.0; //!< restitution factor
-	bool m_enableMotor = false;
-	bool m_enableLimit = false;
+	bool m_servoMotor;
+	real_t m_servoTarget;
+	bool m_enableSpring;
+	real_t m_springStiffness;
+	bool m_springStiffnessLimited;
+	real_t m_springDamping;
+	bool m_springDampingLimited;
+	real_t m_equilibriumPoint;
 
-	//!@}
+	real_t m_currentLimitError;
+	real_t m_currentLimitErrorHi;
+	real_t m_currentPosition;
+	int m_currentLimit;
 
-	//! temp_variables
-	//!@{
-	real_t m_currentLimitError = 0.0; //!< How much is violated this limit
-	int m_currentLimit = 0; //!< 0=free, 1=at lo limit, 2=at hi limit
-	real_t m_accumulatedImpulse = 0.0;
-	//!@}
+	GodotG6DOFRotationalLimitMotor3D()
+	{
+		m_loLimit = 1.0;
+		m_hiLimit = -1.0;
+		m_bounce = 0.0;
+		m_stopERP = 0.2;
+		m_stopCFM = 0.0;
+		m_motorERP = 0.9;
+		m_motorCFM = 0.0;
+		m_enableMotor = false;
+		m_targetVelocity = 0.0;
+		m_maxMotorForce = 6.0;
+		m_servoMotor = false;
+		m_servoTarget = 0.0;
+		m_enableSpring = false;
+		m_springStiffness = 0.0;
+		m_springStiffnessLimited = false;
+		m_springDamping = 0.0;
+		m_springDampingLimited = false;
+		m_equilibriumPoint = 0.0;
 
-	GodotG6DOFRotationalLimitMotor3D() {}
-
-	bool isLimited() {
-		return (m_loLimit < m_hiLimit);
+		m_currentLimitError = 0.0;
+		m_currentLimitErrorHi = 0.0;
+		m_currentPosition = 0.0;
+		m_currentLimit = 0;
 	}
 
-	// Need apply correction.
-	bool needApplyTorques() {
-		return (m_enableMotor || m_currentLimit != 0);
+	bool isLimited()
+	{
+		return m_loLimit < m_hiLimit;
 	}
 
-	// Calculates m_currentLimit and m_currentLimitError.
-	int testLimitValue(real_t test_value);
-
-	// Apply the correction impulses for two bodies.
-	real_t solveAngularLimits(real_t timeStep, Vector3 &axis, real_t jacDiagABInv, GodotBody3D *body0, GodotBody3D *body1, bool p_body0_dynamic, bool p_body1_dynamic);
+	void testLimitValue(real_t test_value);
 };
 
 class GodotG6DOFTranslationalLimitMotor3D {
 public:
-	Vector3 m_lowerLimit = Vector3(0.0, 0.0, 0.0); //!< the constraint lower limits
-	Vector3 m_upperLimit = Vector3(0.0, 0.0, 0.0); //!< the constraint upper limits
-	Vector3 m_accumulatedImpulse = Vector3(0.0, 0.0, 0.0);
-	//! Linear_Limit_parameters
-	//!@{
-	Vector3 m_limitSoftness = Vector3(0.7, 0.7, 0.7); //!< Softness for linear limit
-	Vector3 m_damping = Vector3(1.0, 1.0, 1.0); //!< Damping for linear limit
-	Vector3 m_restitution = Vector3(0.5, 0.5, 0.5); //! Bounce parameter for linear limit
-	//!@}
-	bool enable_limit[3] = { true, true, true };
+	// upper < lower means free
+	// upper == lower means locked
+	// upper > lower means limited
+	Vector3 m_lowerLimit;
+	Vector3 m_upperLimit;
+	Vector3 m_bounce;
+	Vector3 m_stopERP;
+	Vector3 m_stopCFM;
+	Vector3 m_motorERP;
+	Vector3 m_motorCFM;
+	bool m_enableMotor[3];
+	bool m_servoMotor[3];
+	bool m_enableSpring[3];
+	Vector3 m_servoTarget;
+	Vector3 m_springStiffness;
+	bool m_springStiffnessLimited[3];
+	Vector3 m_springDamping;
+	bool m_springDampingLimited[3];
+	Vector3 m_equilibriumPoint;
+	Vector3 m_targetVelocity;
+	Vector3 m_maxMotorForce;
 
-	//! Test limit
-	/*!
-	 * - free means upper < lower,
-	 * - locked means upper == lower
-	 * - limited means upper > lower
-	 * - limitIndex: first 3 are linear, next 3 are angular
-	 */
-	inline bool isLimited(int limitIndex) {
-		return (m_upperLimit[limitIndex] >= m_lowerLimit[limitIndex]);
+	Vector3 m_currentLimitError;
+	Vector3 m_currentLimitErrorHi;
+	Vector3 m_currentLinearDiff;
+	int m_currentLimit[3];
+
+	GodotG6DOFTranslationalLimitMotor3D()
+	{
+		m_lowerLimit = Vector3(0.0, 0.0, 0.0);
+		m_upperLimit = Vector3(0.0, 0.0, 0.0);
+		m_bounce = Vector3(0.0, 0.0, 0.0);
+		m_stopERP = Vector3(0.2, 0.2, 0.2);
+		m_stopCFM = Vector3(0.0, 0.0, 0.0);
+		m_motorERP = Vector3(0.9, 0.9, 0.9);
+		m_motorCFM = Vector3(0.0, 0.0, 0.0);
+
+		m_currentLimitError = Vector3(0.0, 0.0, 0.0);
+		m_currentLimitErrorHi = Vector3(0.0, 0.0, 0.0);
+		m_currentLinearDiff = Vector3(0.0, 0.0, 0.0);
+
+		for (int i = 0; i < 3; i++) {
+			m_enableMotor[i] = false;
+			m_servoMotor[i] = false;
+			m_enableSpring[i] = false;
+			m_servoTarget[i] = 0.0;
+			m_springStiffness[i] = 0.0;
+			m_springStiffnessLimited[i] = false;
+			m_springDamping[i] = 0.0;
+			m_springDampingLimited[i] = false;
+			m_equilibriumPoint[i] = 0.0;
+			m_targetVelocity[i] = 0.0;
+			m_maxMotorForce[i] = 0.0;
+
+			m_currentLimit[i] = 0;
+		}
 	}
 
-	real_t solveLinearAxis(
-			real_t timeStep,
-			real_t jacDiagABInv,
-			GodotBody3D *body1, const Vector3 &pointInA,
-			GodotBody3D *body2, const Vector3 &pointInB,
-			bool p_body1_dynamic, bool p_body2_dynamic,
-			int limit_index,
-			const Vector3 &axis_normal_on_a,
-			const Vector3 &anchorPos);
+	inline bool isLimited(int limitIndex)
+	{
+		return m_upperLimit[limitIndex] >= m_lowerLimit[limitIndex];
+	}
+
+	void testLimitValue(int limitIndex, real_t test_value);
 };
+
+enum Godot6DOFFlags {
+	GODOT_6DOF_FLAGS_CFM_STOP = 1,
+	GODOT_6DOF_FLAGS_ERP_STOP = 2,
+	GODOT_6DOF_FLAGS_CFM_MOTO = 4,
+	GODOT_6DOF_FLAGS_ERP_MOTO = 8,
+	GODOT_6DOF_FLAGS_USE_INFINITE_ERROR = 1 << 16,
+};
+
+#define GODOT_6DOF_FLAGS_AXIS_SHIFT 4 // bits per axis
 
 class GodotGeneric6DOFJoint3D : public GodotJoint3D {
 protected:
@@ -150,173 +215,264 @@ protected:
 		GodotBody3D *_arr[2] = { nullptr, nullptr };
 	};
 
-	//! relative_frames
-	//!@{
-	Transform3D m_frameInA; //!< the constraint space w.r.t body A
-	Transform3D m_frameInB; //!< the constraint space w.r.t body B
-	//!@}
+	Transform3D m_frameInA;
+	Transform3D m_frameInB;
 
-	//! Jacobians
-	//!@{
-	GodotJacobianEntry3D m_jacLinear[3]; //!< 3 orthogonal linear constraints
-	GodotJacobianEntry3D m_jacAng[3]; //!< 3 orthogonal angular constraints
-	//!@}
+	GodotJacobianEntry3D m_jacLinear[3];
+	GodotJacobianEntry3D m_jacAng[3];
 
-	//! Linear_Limit_parameters
-	//!@{
 	GodotG6DOFTranslationalLimitMotor3D m_linearLimits;
-	//!@}
-
-	//! hinge_parameters
-	//!@{
 	GodotG6DOFRotationalLimitMotor3D m_angularLimits[3];
-	//!@}
+
+	bool m_useLinearReferenceFrameA;
+	RotateOrder m_rotateOrder;
 
 protected:
-	//! temporal variables
-	//!@{
-	real_t m_timeStep = 0.0;
 	Transform3D m_calculatedTransformA;
 	Transform3D m_calculatedTransformB;
 	Vector3 m_calculatedAxisAngleDiff;
 	Vector3 m_calculatedAxis[3];
-
-	Vector3 m_AnchorPos; // point between pivots of bodies A and B to solve linear axes
-
-	bool m_useLinearReferenceFrameA = false;
-
-	//!@}
+	Vector3 m_calculatedLinearDiff;
+	real_t m_factA;
+	real_t m_factB;
+	bool m_hasStaticBody;
+	int m_flags;
 
 	GodotGeneric6DOFJoint3D(GodotGeneric6DOFJoint3D const &) = delete;
-	void operator=(GodotGeneric6DOFJoint3D const &) = delete;
+	void operator = (GodotGeneric6DOFJoint3D const &) = delete;
 
-	void buildLinearJacobian(
-			GodotJacobianEntry3D &jacLinear, const Vector3 &normalWorld,
-			const Vector3 &pivotAInW, const Vector3 &pivotBInW);
+	int setAngularLimits();
+	int setLinearLimits();
 
-	void buildAngularJacobian(GodotJacobianEntry3D &jacAngular, const Vector3 &jointAxisW);
-
-	//! calcs the euler angles between the two bodies.
+	void calculateLinearInfo();
 	void calculateAngleInfo();
+	void testAngularLimitMotor(int axis_index);
 
 public:
-	GodotGeneric6DOFJoint3D(GodotBody3D *rbA, GodotBody3D *rbB, const Transform3D &frameInA, const Transform3D &frameInB, bool useLinearReferenceFrameA);
+	GodotGeneric6DOFJoint3D(GodotBody3D *rbA, GodotBody3D *rbB, const Transform3D &frameInA, const Transform3D &frameInB, bool useLinearReferenceFrameA, RotateOrder rotateOrder = RO_XYZ);
 
-	virtual PhysicsServer3D::JointType get_type() const override { return PhysicsServer3D::JOINT_TYPE_6DOF; }
+	virtual PhysicsServer3D::JointType get_type() const override
+	{
+		return PhysicsServer3D::JOINT_TYPE_6DOF;
+	}
 
 	virtual bool setup(real_t p_step) override;
 	virtual void solve(real_t p_step) override;
 
-	// Calcs the global transform for the joint offset for body A an B, and also calcs the angle differences between the bodies.
-	void calculateTransforms();
-
-	// Gets the global transform of the offset for body A.
-	const Transform3D &getCalculatedTransformA() const {
-		return m_calculatedTransformA;
-	}
-
-	// Gets the global transform of the offset for body B.
-	const Transform3D &getCalculatedTransformB() const {
-		return m_calculatedTransformB;
-	}
-
-	const Transform3D &getFrameOffsetA() const {
-		return m_frameInA;
-	}
-
-	const Transform3D &getFrameOffsetB() const {
-		return m_frameInB;
-	}
-
-	Transform3D &getFrameOffsetA() {
-		return m_frameInA;
-	}
-
-	Transform3D &getFrameOffsetB() {
-		return m_frameInB;
-	}
-
-	// Performs Jacobian calculation, and also calculates angle differences and axis.
-	void updateRHS(real_t timeStep);
-
-	// Get the rotation axis in global coordinates.
-	Vector3 getAxis(int axis_index) const;
-
-	// Get the relative Euler angle.
-	real_t getAngle(int axis_index) const;
-
-	// Calculates angular correction and returns true if limit needs to be corrected.
-	bool testAngularLimitMotor(int axis_index);
-
-	void setLinearLowerLimit(const Vector3 &linearLower) {
-		m_linearLimits.m_lowerLimit = linearLower;
-	}
-
-	void setLinearUpperLimit(const Vector3 &linearUpper) {
-		m_linearLimits.m_upperLimit = linearUpper;
-	}
-
-	void setAngularLowerLimit(const Vector3 &angularLower) {
-		m_angularLimits[0].m_loLimit = angularLower.x;
-		m_angularLimits[1].m_loLimit = angularLower.y;
-		m_angularLimits[2].m_loLimit = angularLower.z;
-	}
-
-	void setAngularUpperLimit(const Vector3 &angularUpper) {
-		m_angularLimits[0].m_hiLimit = angularUpper.x;
-		m_angularLimits[1].m_hiLimit = angularUpper.y;
-		m_angularLimits[2].m_hiLimit = angularUpper.z;
-	}
-
-	// Retrieves the angular limit information.
-	GodotG6DOFRotationalLimitMotor3D *getRotationalLimitMotor(int index) {
-		return &m_angularLimits[index];
-	}
-
-	// Retrieves the limit information.
-	GodotG6DOFTranslationalLimitMotor3D *getTranslationalLimitMotor() {
-		return &m_linearLimits;
-	}
-
-	// First 3 are linear, next 3 are angular.
-	void setLimit(int axis, real_t lo, real_t hi) {
-		if (axis < 3) {
-			m_linearLimits.m_lowerLimit[axis] = lo;
-			m_linearLimits.m_upperLimit[axis] = hi;
-		} else {
-			m_angularLimits[axis - 3].m_loLimit = lo;
-			m_angularLimits[axis - 3].m_hiLimit = hi;
-		}
-	}
-
-	//! Test limit
-	/*!
-	 * - free means upper < lower,
-	 * - locked means upper == lower
-	 * - limited means upper > lower
-	 * - limitIndex: first 3 are linear, next 3 are angular
-	 */
-	bool isLimited(int limitIndex) {
-		if (limitIndex < 3) {
-			return m_linearLimits.isLimited(limitIndex);
-		}
-		return m_angularLimits[limitIndex - 3].isLimited();
-	}
-
-	const GodotBody3D *getRigidBodyA() const {
+	const GodotBody3D *getRigidBodyA() const
+	{
 		return A;
 	}
-	const GodotBody3D *getRigidBodyB() const {
+
+	const GodotBody3D *getRigidBodyB() const
+	{
 		return B;
 	}
-
-	virtual void calcAnchorPos(); // overridable
 
 	void set_param(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisParam p_param, real_t p_value);
 	real_t get_param(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisParam p_param) const;
 
 	void set_flag(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisFlag p_flag, bool p_value);
 	bool get_flag(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisFlag p_flag) const;
+
+	GodotG6DOFRotationalLimitMotor3D *getRotationalLimitMotor(int index)
+	{
+		return &m_angularLimits[index];
+	}
+
+	GodotG6DOFTranslationalLimitMotor3D *getTranslationalLimitMotor()
+	{
+		return &m_linearLimits;
+	}
+
+	// Calculates the global transform for the joint offset for body A an B, and also calculates the angle differences between the bodies.
+	void calculateTransforms(const Transform3D &transA, const Transform3D &transB);
+	void calculateTransforms();
+
+	// Gets the global transform of the offset for body A.
+	const Transform3D &getCalculatedTransformA() const
+	{
+		return m_calculatedTransformA;
+	}
+
+	// Gets the global transform of the offset for body B.
+	const Transform3D &getCalculatedTransformB() const
+	{
+		return m_calculatedTransformB;
+	}
+
+	const Transform3D &getFrameOffsetA() const
+	{
+		return m_frameInA;
+	}
+
+	const Transform3D &getFrameOffsetB() const
+	{
+		return m_frameInB;
+	}
+
+	Transform3D &getFrameOffsetA()
+	{
+		return m_frameInA;
+	}
+
+	Transform3D &getFrameOffsetB()
+	{
+		return m_frameInB;
+	}
+
+	// Get the rotation axis in global coordinates (GodotGeneric6DOFJoint3D::calculateTransforms() must be called previously)
+	Vector3 getAxis(int axis_index) const
+	{
+		return m_calculatedAxis[axis_index];
+	}
+
+	// Get the relative Euler angle (GodotGeneric6DOFJoint3D::calculateTransforms() must be called previously)
+	real_t getAngle(int axis_index) const
+	{
+		return m_calculatedAxisAngleDiff[axis_index];
+	}
+
+	// Get the relative position of the constraint pivot (GodotGeneric6DOFJoint3D::calculateTransforms() must be called previously)
+	real_t getRelativePivotPosition(int axis_index)
+	{
+		return m_calculatedLinearDiff[axis_index];
+	}
+
+	void setFrames(const Transform3D &frameA, const Transform3D &frameB);
+
+	void setLinearLowerLimit(const Vector3 &linearLower)
+	{
+		m_linearLimits.m_lowerLimit = linearLower;
+	}
+
+	void getLinearLowerLimit(Vector3 &linearLower)
+	{
+		linearLower = m_linearLimits.m_lowerLimit;
+	}
+
+	void setLinearUpperLimit(const Vector3 &linearUpper)
+	{
+		m_linearLimits.m_upperLimit = linearUpper;
+	}
+
+	void getLinearUpperLimit(Vector3 &linearUpper)
+	{
+		linearUpper = m_linearLimits.m_upperLimit;
+	}
+
+	void setAngularLowerLimit(const Vector3 &angularLower)
+	{
+		for (int i = 0; i < 3; i++)
+			m_angularLimits[0].m_loLimit = Math::normalize_angle(angularLower[i]);
+	}
+
+	void setAngularLowerLimitReversed(const Vector3 &angularLower)
+	{
+		for (int i = 0; i < 3; i++)
+			m_angularLimits[0].m_hiLimit = Math::normalize_angle(-angularLower[i]);
+	}
+
+	void getAngularLowerLimit(Vector3 &angularLower)
+	{
+		for (int i = 0; i < 3; i++)
+			angularLower[i] = m_angularLimits[i].m_loLimit;
+	}
+
+	void getAngularLowerLimitReversed(Vector3 &angularLower)
+	{
+		for (int i = 0; i < 3; i++)
+			angularLower[i] = -m_angularLimits[i].m_hiLimit;
+	}
+
+	void setAngularUpperLimit(const Vector3 &angularUpper)
+	{
+		for (int i = 0; i < 3; i++)
+			m_angularLimits[0].m_hiLimit = Math::normalize_angle(angularUpper[i]);
+	}
+
+	void setAngularUpperLimitReversed(const Vector3 &angularUpper)
+	{
+		for (int i = 0; i < 3; i++)
+			m_angularLimits[0].m_loLimit = Math::normalize_angle(-angularUpper[i]);
+	}
+
+	void getAngularUpperLimit(Vector3 &angularUpper)
+	{
+		for (int i = 0; i < 3; i++)
+			angularUpper[i] = m_angularLimits[i].m_hiLimit;
+	}
+
+	void getAngularUpperLimitReversed(Vector3 &angularUpper)
+	{
+		for (int i = 0; i < 3; i++)
+			angularUpper[i] = -m_angularLimits[i].m_loLimit;
+	}
+
+	// first 3 are linear, next 3 are angular
+	void setLimit(int axis, real_t lo, real_t hi)
+	{
+		if (axis < 3) {
+			m_linearLimits.m_lowerLimit[axis] = lo;
+			m_linearLimits.m_upperLimit[axis] = hi;
+		} else {
+			m_angularLimits[axis - 3].m_loLimit = Math::normalize_angle(lo);
+			m_angularLimits[axis - 3].m_hiLimit = Math::normalize_angle(hi);
+		}
+	}
+
+	void setLimitReversed(int axis, real_t lo, real_t hi)
+	{
+		if (axis < 3) {
+			m_linearLimits.m_lowerLimit[axis] = lo;
+			m_linearLimits.m_upperLimit[axis] = hi;
+		} else {
+			m_angularLimits[axis - 3].m_loLimit = -Math::normalize_angle(hi);
+			m_angularLimits[axis - 3].m_hiLimit = -Math::normalize_angle(lo);
+		}
+	}
+
+	bool isLimited(int limitIndex)
+	{
+		if (limitIndex < 3)
+			return m_linearLimits.isLimited(limitIndex);
+
+		return m_angularLimits[limitIndex - 3].isLimited();
+	}
+
+	void setRotationOrder(RotateOrder rotateOrder)
+	{
+		m_rotateOrder = rotateOrder;
+	}
+
+	RotateOrder getRotationOrder()
+	{
+		return m_rotateOrder;
+	}
+
+	void setAxis(const Vector3 &axis1, const Vector3 &axis2);
+
+	void setBounce(int index, real_t bounce);
+
+	void enableMotor(int index, bool enable);
+	void setServo(int index, bool enable); // set the type of the motor (servo or not) (the motor has to be turned on for servo also)
+	void setTargetVelocity(int index, real_t velocity);
+	void setServoTarget(int index, real_t target);
+	void setMaxMotorForce(int index, real_t force);
+
+	void enableSpring(int index, bool enable);
+	void setStiffness(int index, real_t stiffness, bool limitIfNeeded = true); // if limitIfNeeded is true, the system will automatically limit the stiffness in necessary situations where otherwise the spring would move unrealistically too widely
+	void setDamping(int index, real_t damping, bool limitIfNeeded = true); // if limitIfNeeded is true, the system will automatically limit the damping in necessary situations where otherwise the spring would blow up
+	void setEquilibriumPoint(); // set the current constraint position/orientation as an equilibrium point for all DOF
+	void setEquilibriumPoint(int index); // set the current constraint position/orientation as an equilibrium point for a given DOF
+	void setEquilibriumPoint(int index, real_t value);
+
+	// Override the default global value of a parameter (such as ERP or CFM), optionally provide the axis (0..5).
+	// If no axis is provided, it uses the default axis for this constraint.
+	virtual void setParam(int num, real_t value, int axis = -1);
+	virtual real_t getParam(int num, int axis = -1) const;
+
+
 };
 
 #endif // GODOT_GENERIC_6DOF_JOINT_3D_H
