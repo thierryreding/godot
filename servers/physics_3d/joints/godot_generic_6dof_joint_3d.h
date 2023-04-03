@@ -62,7 +62,19 @@ enum RotateOrder {
 	RO_ZYX,
 };
 
-class GodotG6DOFRotationalLimitMotor3D {
+struct GodotGeneric6DOFConstraintInfo {
+	real_t fps;
+	real_t erp;
+	real_t *m_J1linearAxis, *m_J1angularAxis, *m_J2linearAxis, *m_J2angularAxis;
+	int rowskip;
+	real_t m_constraintError;
+	real_t *cfm;
+	real_t *m_lowerLimit, m_upperLimit;
+	int m_numIterations;
+	real_t m_damping;
+};
+
+class GodotGeneric6DOFRotationalLimitMotor3D {
 public:
 	// upper < lower means free
 	// upper == lower means locked
@@ -91,7 +103,7 @@ public:
 	real_t m_currentPosition;
 	int m_currentLimit;
 
-	GodotG6DOFRotationalLimitMotor3D()
+	GodotGeneric6DOFRotationalLimitMotor3D()
 	{
 		m_loLimit = 1.0;
 		m_hiLimit = -1.0;
@@ -126,7 +138,7 @@ public:
 	void testLimitValue(real_t test_value);
 };
 
-class GodotG6DOFTranslationalLimitMotor3D {
+class GodotGeneric6DOFTranslationalLimitMotor3D {
 public:
 	// upper < lower means free
 	// upper == lower means locked
@@ -155,7 +167,7 @@ public:
 	Vector3 m_currentLinearDiff;
 	int m_currentLimit[3];
 
-	GodotG6DOFTranslationalLimitMotor3D()
+	GodotGeneric6DOFTranslationalLimitMotor3D()
 	{
 		m_lowerLimit = Vector3(0.0, 0.0, 0.0);
 		m_upperLimit = Vector3(0.0, 0.0, 0.0);
@@ -221,8 +233,8 @@ protected:
 	GodotJacobianEntry3D m_jacLinear[3];
 	GodotJacobianEntry3D m_jacAng[3];
 
-	GodotG6DOFTranslationalLimitMotor3D m_linearLimits;
-	GodotG6DOFRotationalLimitMotor3D m_angularLimits[3];
+	GodotGeneric6DOFTranslationalLimitMotor3D m_linearLimits;
+	GodotGeneric6DOFRotationalLimitMotor3D m_angularLimits[3];
 
 	bool m_useLinearReferenceFrameA;
 	RotateOrder m_rotateOrder;
@@ -251,6 +263,17 @@ protected:
 public:
 	GodotGeneric6DOFJoint3D(GodotBody3D *rbA, GodotBody3D *rbB, const Transform3D &frameInA, const Transform3D &frameInB, bool useLinearReferenceFrameA, RotateOrder rotateOrder = RO_XYZ);
 
+	int get_limit_motor_info(GodotGeneric6DOFRotationalLimitMotor3D *motor,
+				 const Transform3D &transA,
+				 const Transform3D &transB,
+				 const Vector3 &linVelA,
+				 const Vector3 &linVelB,
+				 const Vector3 &angVelA,
+				 const Vector3 &angVelB,
+				 GodotGeneric6DOFConstraintInfo *info,
+				 int row, Vector3 &ax1, bool rotational,
+				 bool rotationAllowed = false);
+
 	virtual PhysicsServer3D::JointType get_type() const override
 	{
 		return PhysicsServer3D::JOINT_TYPE_6DOF;
@@ -275,12 +298,12 @@ public:
 	void set_flag(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisFlag p_flag, bool p_value);
 	bool get_flag(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisFlag p_flag) const;
 
-	GodotG6DOFRotationalLimitMotor3D *getRotationalLimitMotor(int index)
+	GodotGeneric6DOFRotationalLimitMotor3D *getRotationalLimitMotor(int index)
 	{
 		return &m_angularLimits[index];
 	}
 
-	GodotG6DOFTranslationalLimitMotor3D *getTranslationalLimitMotor()
+	GodotGeneric6DOFTranslationalLimitMotor3D *getTranslationalLimitMotor()
 	{
 		return &m_linearLimits;
 	}

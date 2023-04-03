@@ -53,7 +53,7 @@ subject to the following restrictions:
 
 //////////////////////////// GodotG6DOFRotationalLimitMotor3D ////////////////////////////////////
 
-void GodotG6DOFRotationalLimitMotor3D::testLimitValue(real_t test_value)
+void GodotGeneric6DOFRotationalLimitMotor3D::testLimitValue(real_t test_value)
 {
 	// we can't normalize the angles here because we would lost the sign that we use later, but it doesn't seem to be a problem
 	if (m_loLimit > m_hiLimit) {
@@ -71,7 +71,7 @@ void GodotG6DOFRotationalLimitMotor3D::testLimitValue(real_t test_value)
 
 //////////////////////////// GodotG6DOFTranslationalLimitMotor3D ////////////////////////////////////
 
-void GodotG6DOFTranslationalLimitMotor3D::testLimitValue(int limitIndex, real_t test_value)
+void GodotGeneric6DOFTranslationalLimitMotor3D::testLimitValue(int limitIndex, real_t test_value)
 {
 	real_t loLimit = m_lowerLimit[limitIndex];
 	real_t hiLimit = m_upperLimit[limitIndex];
@@ -103,14 +103,151 @@ GodotGeneric6DOFJoint3D::GodotGeneric6DOFJoint3D(GodotBody3D *rbA, GodotBody3D *
 
 bool GodotGeneric6DOFJoint3D::setup(real_t p_step)
 {
+	int i;
+
 	print_line(vformat("> GodotGeneric6DOFJoint3D::%s(p_step=%f)", __func__, p_step));
+
+	calculateTransforms();
+
+	// test linear limits
+	for (i = 0; i < 3; i++) {
+		//if (m_linearLimits.m_currentLimit[i] == 4)
+		//	info->m_numConstraintRows += 2;
+		//else if (m_linearLimits.m_currentLimit[i] != 0)
+		//	info->m_numConstraintRows += 1;
+
+		//if (m_linearLimits.m_enableMotor[i])
+		//	info->m_numConstraintRows += 1;
+
+		//if (m_linearLimits.m_enableSpring[i])
+		//	info->m_numConstraintRows += 1;
+	}
+
+	// test angular limits
+	for (i = 0; i < 3; i++) {
+		testAngularLimitMotor(i);
+
+		//if (m_angularLimits[i].m_currentLimit == 4)
+		//	info->m_numConstraintRows += 2;
+		//else if (m_angularLimits[i].m_currentLimit[i] != 0)
+		//	info->m_numConstraintRows += 1;
+
+		//if (m_angularLimits[i].m_enableMotor)
+		//	info->m_numConstraintRows += 1;
+
+		//if (m_angularLimits[i].m_enableSpring)
+		//	info->m_numConstraintRows += 1;
+	}
+
 	print_line(vformat("< GodotGeneric6DOFJoint3D::%s()", __func__));
 	return true;
 }
 
+int GodotGeneric6DOFJoint3D::get_limit_motor_info(GodotGeneric6DOFRotationalLimitMotor3D *motor,
+						  const Transform3D &transA,
+						  const Transform3D &transB,
+						  const Vector3 &linVelA,
+						  const Vector3 &linVelB,
+						  const Vector3 &angVelA,
+						  const Vector3 &angVelB,
+						  GodotGeneric6DOFConstraintInfo *info,
+						  int row, Vector3 &axis, bool rotational,
+						  bool rotationAllowed)
+{
+	return 0;
+}
+
 void GodotGeneric6DOFJoint3D::solve(real_t p_step)
 {
+	GodotGeneric6DOFConstraintInfo info;
+	const Transform3D &transA = A->get_transform();
+	const Transform3D &transB = B->get_transform();
+	const Vector3 &linVelA = A->get_linear_velocity();
+	const Vector3 &linVelB = B->get_linear_velocity();
+	const Vector3 &angVelA = A->get_angular_velocity();
+	const Vector3 &angVelB = B->get_angular_velocity();
+
 	print_line(vformat("> GodotGeneric6DOFJoint3D::%s(p_step=%f)", __func__, p_step));
+
+	memset(&info, 0, sizeof(info));
+
+	// for stability, better to solve angular limits first
+	// solve angular limits
+	int index[] = { 0, 1, 2 };
+	int i, row = 0;
+
+	switch (m_rotateOrder) {
+		case RO_XYZ:
+			index[0] = 0;
+			index[1] = 1;
+			index[2] = 2;
+			break;
+
+		case RO_XZY:
+			index[0] = 0;
+			index[1] = 2;
+			index[2] = 1;
+			break;
+
+		case RO_YXZ:
+			index[0] = 1;
+			index[1] = 0;
+			index[2] = 2;
+			break;
+
+		case RO_YZX:
+			index[0] = 1;
+			index[1] = 2;
+			index[2] = 0;
+			break;
+
+		case RO_ZXY:
+			index[0] = 2;
+			index[1] = 0;
+			index[2] = 1;
+			break;
+
+		case RO_ZYX:
+			index[0] = 2;
+			index[1] = 1;
+			index[2] = 0;
+			break;
+	}
+
+	for (i = 0; i < 3; i++) {
+		int j = index[i];
+
+		if (m_angularLimits[j].m_currentLimit || m_angularLimits[j].m_enableMotor || m_angularLimits[i].m_enableSpring) {
+			int flags = m_flags >> ((i + 3) * GODOT_6DOF_FLAGS_AXIS_SHIFT);
+			Vector3 axis = getAxis(i);
+
+			if ((flags & GODOT_6DOF_FLAGS_CFM_STOP) == 0)
+				m_angularLimits[i].m_stopCFM = info.cfm[0];
+
+			if ((flags & GODOT_6DOF_FLAGS_ERP_STOP) == 0)
+				m_angularLimits[i].m_stopERP = info.erp;
+
+			if ((flags & GODOT_6DOF_FLAGS_CFM_MOTO) == 0)
+				m_angularLimits[i].m_motorCFM = info.cfm[0];
+
+			if ((flags & GODOT_6DOF_FLAGS_ERP_MOTO) == 0)
+				m_angularLimits[i].m_motorERP = info.erp;
+
+			row += get_limit_motor_info(&m_angularLimits[i], transA, transB, linVelA, linVelB, angVelA, angVelB, &info, row, axis, true);
+		}
+
+	}
+
+	// solve linear limits
+	GodotGeneric6DOFRotationalLimitMotor3D motor;
+
+	for (i = 0; i < 3; i++) {
+		if (m_linearLimits.m_currentLimit[i] || m_linearLimits.m_enableMotor[i] || m_linearLimits.m_enableSpring[i]) {
+			motor.m_bounce = m_linearLimits.m_bounce[i];
+			motor.m_currentLimit = m_linearLimits.m_currentLimit[i];
+		}
+	}
+
 	print_line(vformat("< GodotGeneric6DOFJoint3D::%s()", __func__));
 }
 
@@ -441,6 +578,35 @@ void GodotGeneric6DOFJoint3D::calculateTransforms()
 	m_factB = 1.0 - m_factA;
 }
 
+static real_t AdjustAngleToLimits(real_t angle, real_t lowerLimit, real_t upperLimit)
+{
+	if (lowerLimit >= upperLimit)
+		return angle;
+
+	if (angle < lowerLimit) {
+		real_t diffLo = Math::abs(Math::normalize_angle(lowerLimit - angle));
+		real_t diffHi = Math::abs(Math::normalize_angle(upperLimit - angle));
+		return (diffLo < diffHi) ? angle : (angle + Math_PI * 2);
+	}
+
+	if (angle > upperLimit) {
+		real_t diffLo = Math::abs(Math::normalize_angle(angle - upperLimit));
+		real_t diffHi = Math::abs(Math::normalize_angle(angle - lowerLimit));
+		return (diffLo < diffHi) ? (angle - Math_PI * 2) : angle;
+	}
+
+	return angle;
+}
+
+void GodotGeneric6DOFJoint3D::testAngularLimitMotor(int axis_index)
+{
+	real_t angle = m_calculatedAxisAngleDiff[axis_index];
+	angle = AdjustAngleToLimits(angle, m_angularLimits[axis_index].m_loLimit, m_angularLimits[axis_index].m_hiLimit);
+
+	m_angularLimits[axis_index].m_currentPosition = angle;
+	m_angularLimits[axis_index].testLimitValue(angle);
+}
+
 #if 0
 void GodotGeneric6DOFJoint3D::buildLinearJacobian(
 		GodotJacobianEntry3D &jacLinear, const Vector3 &normalWorld,
@@ -469,35 +635,6 @@ void GodotGeneric6DOFJoint3D::buildAngularJacobian(
 					B->get_principal_inertia_axes().transposed(),
 					A->get_inv_inertia(),
 					B->get_inv_inertia()));
-}
-
-real_t AdjustAngleToLimits(real_t angle, real_t lowerLimit, real_t upperLimit)
-{
-	if (lowerLimit >= upperLimit)
-		return angle;
-
-	if (angle < lowerLimit) {
-		real_t diffLo = Math::abs(Math::normalize_angle(lowerLimit - angle));
-		real_t diffHi = Math::abs(Math::normalize_angle(upperLimit - angle));
-		return (diffLo < diffHi) ? angle : (angle + Math_PI * 2);
-	}
-
-	if (angle > upperLimit) {
-		real_t diffLo = Math::abs(Math::normalize_angle(angle - upperLimit));
-		real_t diffHi = Math::abs(Math::normalize_angle(angle - lowerLimit));
-		return (diffLo < diffHi) ? (angle - Math_PI * 2) : angle;
-	}
-
-	return angle;
-}
-
-bool GodotGeneric6DOFJoint3D::testAngularLimitMotor(int axis_index) {
-	real_t angle = m_calculatedAxisAngleDiff[axis_index];
-	angle = AdjustAngleToLimits(angle, m_angularLimits[axis_index].m_loLimit, m_angularLimits[axis_index].m_hiLimit);
-	m_angularLimits[axis_index].m_currentPosition = angle;
-	//test limits
-	m_angularLimits[axis_index].testLimitValue(angle);
-	return m_angularLimits[axis_index].needApplyTorques();
 }
 
 bool GodotGeneric6DOFJoint3D::setup(real_t p_timestep) {
