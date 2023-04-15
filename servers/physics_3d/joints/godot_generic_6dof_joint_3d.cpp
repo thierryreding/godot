@@ -376,33 +376,6 @@ void GodotGeneric6DOFJoint3D::solve(real_t p_timestep) {
 
 	int i;
 
-	// linear
-
-	Vector3 pointInA = m_calculatedTransformA.origin;
-	Vector3 pointInB = m_calculatedTransformB.origin;
-
-	real_t jacDiagABInv;
-	Vector3 linear_axis;
-	for (i = 0; i < 3; i++) {
-		if (m_linearLimits.enable_limit[i] && m_linearLimits.isLimited(i)) {
-			jacDiagABInv = real_t(1.) / m_jacLinear[i].getDiagonal();
-
-			if (m_useLinearReferenceFrameA) {
-				linear_axis = m_calculatedTransformA.basis.get_column(i);
-			} else {
-				linear_axis = m_calculatedTransformB.basis.get_column(i);
-			}
-
-			m_linearLimits.solveLinearAxis(
-					m_timeStep,
-					jacDiagABInv,
-					A, pointInA,
-					B, pointInB,
-					dynamic_A, dynamic_B,
-					i, linear_axis, m_AnchorPos);
-		}
-	}
-
 	// angular
 	Vector3 angular_axis;
 	real_t angularJacDiagABInv;
@@ -415,6 +388,31 @@ void GodotGeneric6DOFJoint3D::solve(real_t p_timestep) {
 
 			m_angularLimits[i].solveAngularLimits(m_timeStep, angular_axis, angularJacDiagABInv, A, B, dynamic_A, dynamic_B);
 		}
+	}
+
+	// linear
+
+	Vector3 pointInA = m_calculatedTransformA.origin;
+	Vector3 pointInB = m_calculatedTransformB.origin;
+
+	real_t jacDiagABInv;
+	Vector3 linear_axis;
+	for (i = 0; i < 3; i++) {
+		jacDiagABInv = real_t(1.) / m_jacLinear[i].getDiagonal();
+
+		if (m_useLinearReferenceFrameA) {
+			linear_axis = m_calculatedTransformA.basis.get_column(i);
+		} else {
+			linear_axis = m_calculatedTransformB.basis.get_column(i);
+		}
+
+		m_linearLimits.solveLinearAxis(
+				m_timeStep,
+				jacDiagABInv,
+				A, pointInA,
+				B, pointInB,
+				dynamic_A, dynamic_B,
+				i, linear_axis, m_AnchorPos);
 	}
 }
 
