@@ -76,7 +76,13 @@ public:
 	real_t m_bounce = 0.0; //!< restitution factor
 	bool m_enableMotor = false;
 	bool m_enableLimit = false;
-
+	//!@}
+	//! spring_parameters
+	//!@{
+	bool m_enableSpring;
+	real_t m_springStiffness;
+	real_t m_springDamping;
+	real_t m_springEquilibrium;
 	//!@}
 
 	//! temp_variables
@@ -117,6 +123,29 @@ public:
 	//!@}
 	bool enable_limit[3] = { true, true, true };
 
+	//! Linear_Motor_parameters
+	//!@{
+	bool m_enableMotor[3];
+	Vector3 m_targetVelocity;
+	Vector3 m_maxMotorForce;
+	Vector3 m_accumulatedMotorImpulse;
+	//!@}
+	//! Linear_Spring_parameters
+	//!@{
+	bool m_enableSpring[3];
+	Vector3 m_springStiffness;
+	Vector3 m_springDamping;
+	Vector3 m_springEquilibrium;
+	//!@}
+
+	// temporary variables
+	Vector3 m_currentLimitError = Vector3(0.0, 0.0, 0.0);
+	Vector3 m_currentLimitErrorHi = Vector3(0.0, 0.0, 0.0);
+	Vector3 m_currentLinearDiff = Vector3(0.0, 0.0, 0.0);
+	int m_currentLimit[3] = { 0, 0, 0 };
+
+	void testLimitValue(int limitIndex, real_t value);
+
 	//! Test limit
 	/*!
 	 * - free means upper < lower,
@@ -128,7 +157,7 @@ public:
 		return (m_upperLimit[limitIndex] >= m_lowerLimit[limitIndex]);
 	}
 
-	real_t solveLinearAxis(
+	void solveLinearAxis(
 			real_t timeStep,
 			real_t jacDiagABInv,
 			GodotBody3D *body1, const Vector3 &pointInA,
@@ -180,6 +209,10 @@ protected:
 	Transform3D m_calculatedTransformB;
 	Vector3 m_calculatedAxisAngleDiff;
 	Vector3 m_calculatedAxis[3];
+	Vector3 m_calculatedLinearDiff;
+	real_t m_factA;
+	real_t m_factB;
+	bool m_hasStaticBody;
 
 	Vector3 m_AnchorPos; // point between pivots of bodies A and B to solve linear axes
 
@@ -195,6 +228,8 @@ protected:
 			const Vector3 &pivotAInW, const Vector3 &pivotBInW);
 
 	void buildAngularJacobian(GodotJacobianEntry3D &jacAngular, const Vector3 &jointAxisW);
+
+	void calculateLinearInfo();
 
 	//! calcs the euler angles between the two bodies.
 	void calculateAngleInfo();

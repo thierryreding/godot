@@ -58,6 +58,9 @@ http://gimpact.sf.net
 
 #define GENERIC_D6_DISABLE_WARMSTARTING 1
 
+#define DEBUG(fmt, ...) \
+	print_line(vformat(fmt, __VA_ARGS__))
+
 //////////////////////////// GodotG6DOFRotationalLimitMotor3D ////////////////////////////////////
 
 int GodotG6DOFRotationalLimitMotor3D::testLimitValue(real_t test_value) {
@@ -150,7 +153,25 @@ real_t GodotG6DOFRotationalLimitMotor3D::solveAngularLimits(
 
 //////////////////////////// GodotG6DOFTranslationalLimitMotor3D ////////////////////////////////////
 
-real_t GodotG6DOFTranslationalLimitMotor3D::solveLinearAxis(
+void GodotG6DOFTranslationalLimitMotor3D::testLimitValue(int limitIndex, real_t value)
+{
+	real_t loLimit = m_lowerLimit[limitIndex];
+	real_t hiLimit = m_upperLimit[limitIndex];
+
+	if (loLimit > hiLimit) {
+		m_currentLimitError[limitIndex] = 0;
+		m_currentLimit[limitIndex] = 0;
+	} else if (loLimit == hiLimit) {
+		m_currentLimitError[limitIndex] = value - loLimit;
+		m_currentLimit[limitIndex] = 3;
+	} else {
+		m_currentLimitError[limitIndex] = value - loLimit;
+		m_currentLimitErrorHi[limitIndex] = value - hiLimit;
+		m_currentLimit[limitIndex] = 4;
+	}
+}
+
+void GodotG6DOFTranslationalLimitMotor3D::solveLinearAxis(
 		real_t timeStep,
 		real_t jacDiagABInv,
 		GodotBody3D *body1, const Vector3 &pointInA,
@@ -158,7 +179,8 @@ real_t GodotG6DOFTranslationalLimitMotor3D::solveLinearAxis(
 		bool p_body1_dynamic, bool p_body2_dynamic,
 		int limit_index,
 		const Vector3 &axis_normal_on_a,
-		const Vector3 &anchorPos) {
+		const Vector3 &anchorPos)
+{
 	///find relative velocity
 	//    Vector3 rel_pos1 = pointInA - body1->get_transform().origin;
 	//    Vector3 rel_pos2 = pointInB - body2->get_transform().origin;
@@ -173,47 +195,187 @@ real_t GodotG6DOFTranslationalLimitMotor3D::solveLinearAxis(
 
 	/// apply displacement correction
 
-	//positional error (zeroth order error)
-	real_t depth = -(pointInA - pointInB).dot(axis_normal_on_a);
-	real_t lo = real_t(-1e30);
-	real_t hi = real_t(1e30);
+	if (enable_limit[limit_index] && isLimited(limit_index)) {
+		//positional error (zeroth order error)
+		real_t depth = -(pointInA - pointInB).dot(axis_normal_on_a);
+		real_t lo = real_t(-1e30);
+		real_t hi = real_t(1e30);
 
-	real_t minLimit = m_lowerLimit[limit_index];
-	real_t maxLimit = m_upperLimit[limit_index];
+		real_t minLimit = m_lowerLimit[limit_index];
+		real_t maxLimit = m_upperLimit[limit_index];
 
-	//handle the limits
-	if (minLimit < maxLimit) {
-		{
+		//DEBUG("%s(axis: %d): limits: %d/%d", __func__, limit_index, minLimit, maxLimit);
+		//if (limit_index == 1) {
+		//	DEBUG("axis: %d, currentLimit: %d, error: %f/%f, diff: %f", limit_index,
+		//	      m_currentLimit[limit_index], m_currentLimitError[limit_index],
+		//	      m_currentLimitErrorHi[limit_index], m_currentLinearDiff[limit_index]);
+		//}
+
+		//handle the limits
+		if (minLimit <= maxLimit) {
 			if (depth > maxLimit) {
 				depth -= maxLimit;
 				lo = real_t(0.);
-
+			} else if (depth < minLimit) {
+				depth -= minLimit;
+				hi = real_t(0.);
 			} else {
-				if (depth < minLimit) {
-					depth -= minLimit;
-					hi = real_t(0.);
-				} else {
-					return 0.0f;
-				}
+				depth = 0.0;
 			}
+		} else {
+			depth = 0.0;
+		}
+
+		real_t normalImpulse = m_limitSoftness[limit_index] * (m_restitution[limit_index] * depth / timeStep - m_damping[limit_index] * rel_vel) * jacDiagABInv;
+
+		real_t oldNormalImpulse = m_accumulatedImpulse[limit_index];
+		real_t sum = oldNormalImpulse + normalImpulse;
+		m_accumulatedImpulse[limit_index] = sum > hi ? real_t(0.) : (sum < lo ? real_t(0.) : sum);
+		normalImpulse = m_accumulatedImpulse[limit_index] - oldNormalImpulse;
+
+		Vector3 impulse_vector = axis_normal_on_a * normalImpulse;
+
+		if (p_body1_dynamic) {
+			body1->apply_impulse(impulse_vector, rel_pos1);
+		}
+
+		if (p_body2_dynamic) {
+			body2->apply_impulse(-impulse_vector, rel_pos2);
 		}
 	}
 
-	real_t normalImpulse = m_limitSoftness[limit_index] * (m_restitution[limit_index] * depth / timeStep - m_damping[limit_index] * rel_vel) * jacDiagABInv;
+	if (m_enableMotor[limit_index]) {
+		real_t desiredVelocity = -m_targetVelocity[limit_index];
+		real_t motor_relvel = desiredVelocity + rel_vel;
+		real_t normalImpulse = -motor_relvel; // * jacDiagABInv;
 
-	real_t oldNormalImpulse = m_accumulatedImpulse[limit_index];
-	real_t sum = oldNormalImpulse + normalImpulse;
-	m_accumulatedImpulse[limit_index] = sum > hi ? real_t(0.) : (sum < lo ? real_t(0.) : sum);
-	normalImpulse = m_accumulatedImpulse[limit_index] - oldNormalImpulse;
+#if 1
+		real_t new_acc = m_accumulatedMotorImpulse[limit_index] + Math::abs(normalImpulse);
+		if (new_acc > m_maxMotorForce[limit_index]) {
+			new_acc = m_maxMotorForce[limit_index];
+		}
 
-	Vector3 impulse_vector = axis_normal_on_a * normalImpulse;
-	if (p_body1_dynamic) {
-		body1->apply_impulse(impulse_vector, rel_pos1);
+		real_t delta = new_acc - m_accumulatedMotorImpulse[limit_index];
+		if (normalImpulse < 0.0) {
+			normalImpulse = -delta;
+		} else {
+			normalImpulse = delta;
+		}
+
+		m_accumulatedMotorImpulse[limit_index] = new_acc;
+#else
+		// get motor factor
+		real_t depth = -(pointInA - pointInB).dot(axis_normal_on_a);
+		real_t limit_factor = 1.0;
+
+		if (m_lowerLimit[limit_index] > m_upperLimit[limit_index]) {
+			limit_factor = 1.0;
+		} else if (m_lowerLimit[limit_index] == m_upperLimit[limit_index]) {
+			limit_factor = 0.0;
+		} else {
+			real_t delta_max = desiredVelocity / timeStep;
+			real_t pos = depth;
+			real_t low = -m_maxMotorForce[limit_index];
+			real_t high = m_maxMotorForce[limit_index];
+			limit_factor = 1.0;
+
+			if (delta_max < 0.0) {
+				if ((pos >= low) && (pos < (low - delta_max))) {
+					limit_factor = (low - pos) / delta_max;
+				} else if (pos < low) {
+					limit_factor = 0.0;
+				} else {
+					limit_factor = 1.0;
+				}
+			} else if (delta_max > 0.0) {
+				if ((pos < high) && (pos > (high - delta_max))) {
+					limit_factor = (high - pos) / delta_max;
+				} else if (pos > high) {
+					limit_factor = 0.0;
+				} else {
+					limit_factor = 1.0;
+				}
+			} else {
+				limit_factor = 0.0;
+			}
+		}
+
+		normalImpulse *= limit_factor;
+#endif
+
+		Vector3 impulse_vector = axis_normal_on_a * normalImpulse * timeStep;
+
+		// XXX implement motor force limit
+
+		if (p_body1_dynamic) {
+			body1->apply_impulse(impulse_vector, rel_pos1);
+		}
+
+		if (p_body2_dynamic) {
+			body2->apply_impulse(-impulse_vector, rel_pos2);
+		}
+
+#if 0
+		if (m_accumulatedMotorImpulse[limit_index] < m_maxMotorForce[limit_index]) {
+			real_t desiredVelocity = m_targetVelocity[limit_index];
+			real_t motor_relvel = desiredVelocity + rel_vel;
+			real_t normalImpulse = -motor_relvel * jacDiagABInv;
+			// clamp accumulated pulse
+			real_t new_acc = m_accumulatedMotorImpulse[limit_index] + Math::abs(normalImpulse);
+			if (new_acc > m_maxMotorForce[limit_index]) {
+				new_acc = m_maxMotorForce[limit_index];
+			}
+			real_t delta = new_acc - m_accumulatedMotorImpulse[limit_index];
+			if (normalImpulse < 0.0) {
+				normalImpulse = -delta;
+			} else {
+				normalImpulse = delta;
+			}
+			m_accumulatedMotorImpulse[limit_index] = new_acc;
+			// apply clamped impulse
+			Vector3 impulse_vector = axis_normal_on_a * normalImpulse;
+			if (p_body1_dynamic) {
+				body1->apply_impulse(impulse_vector, rel_pos1);
+			}
+			if (p_body2_dynamic) {
+				body2->apply_impulse(-impulse_vector, rel_pos2);
+			}
+		}
+#endif
 	}
-	if (p_body2_dynamic) {
-		body2->apply_impulse(-impulse_vector, rel_pos2);
+
+	if (m_enableSpring[limit_index]) {
+		Vector3 position = pointInB - pointInA;
+		DEBUG("position: %s", position);
+		real_t error = position[limit_index] - m_springEquilibrium[limit_index];
+		real_t ks = m_springStiffness[limit_index];
+		real_t kd = m_springDamping[limit_index];
+
+		real_t mA = 1.0 / body1->get_inv_mass();
+		real_t mB = 1.0 / body2->get_inv_mass();
+		real_t m;
+		if (body1->get_inv_mass() == 0)
+			m = mB;
+		else if (body2->get_inv_mass() == 0)
+			m = mA;
+		else
+			m = mA * mB / (mA + mB);
+
+		/*
+		// avoid damping that would blow up the spring
+		if (kd * timeStep > m)
+			kd = m / timeStep;
+		*/
+
+		real_t normalImpulse = rel_vel + (ks * error - kd * rel_vel) / m;
+		Vector3 impulse_vector = axis_normal_on_a * normalImpulse * timeStep;
+
+		if (p_body1_dynamic)
+			body1->apply_impulse(impulse_vector, rel_pos1);
+
+		if (p_body2_dynamic)
+			body2->apply_impulse(-impulse_vector, rel_pos2);
 	}
-	return normalImpulse;
 }
 
 //////////////////////////// GodotGeneric6DOFJoint3D ////////////////////////////////////
@@ -227,6 +389,17 @@ GodotGeneric6DOFJoint3D::GodotGeneric6DOFJoint3D(GodotBody3D *rbA, GodotBody3D *
 	B = rbB;
 	A->add_constraint(this, 0);
 	B->add_constraint(this, 1);
+}
+
+void GodotGeneric6DOFJoint3D::calculateLinearInfo()
+{
+	m_calculatedLinearDiff = m_calculatedTransformB.origin - m_calculatedTransformA.origin;
+	m_calculatedLinearDiff = m_calculatedTransformA.basis.inverse().xform(m_calculatedLinearDiff);
+
+	for (int i = 0; i < 3; i++) {
+		m_linearLimits.m_currentLinearDiff[i] = m_calculatedLinearDiff[i];
+		m_linearLimits.testLimitValue(i, m_calculatedLinearDiff[i]);
+	}
 }
 
 void GodotGeneric6DOFJoint3D::calculateAngleInfo() {
@@ -273,7 +446,21 @@ void GodotGeneric6DOFJoint3D::calculateTransforms() {
 	m_calculatedTransformA = A->get_transform() * m_frameInA;
 	m_calculatedTransformB = B->get_transform() * m_frameInB;
 
+	calculateLinearInfo();
 	calculateAngleInfo();
+
+	real_t miA = A->get_inv_mass();
+	real_t miB = B->get_inv_mass();
+	m_hasStaticBody = Math::is_zero_approx(miA) || Math::is_zero_approx(miB);
+	real_t miS = miA + miB;
+
+	if (miS > 0.0) {
+		m_factA = miB / miS;
+	} else {
+		m_factA = 0.5;
+	}
+
+	m_factB = 1.0 - m_factA;
 }
 
 void GodotGeneric6DOFJoint3D::buildLinearJacobian(
@@ -323,6 +510,7 @@ bool GodotGeneric6DOFJoint3D::setup(real_t p_timestep) {
 
 	// Clear accumulated impulses for the next simulation step
 	m_linearLimits.m_accumulatedImpulse = Vector3(real_t(0.), real_t(0.), real_t(0.));
+	m_linearLimits.m_accumulatedMotorImpulse = Vector3(0.0, 0.0, 0.0);
 	int i;
 	for (i = 0; i < 3; i++) {
 		m_angularLimits[i].m_accumulatedImpulse = real_t(0.);
@@ -350,9 +538,8 @@ bool GodotGeneric6DOFJoint3D::setup(real_t p_timestep) {
 				normalWorld = m_calculatedTransformB.basis.get_column(i);
 			}
 
-			buildLinearJacobian(
-					m_jacLinear[i], normalWorld,
-					pivotAInW, pivotBInW);
+			buildLinearJacobian(m_jacLinear[i], normalWorld,
+					    pivotAInW, pivotBInW);
 		}
 	}
 
@@ -399,6 +586,7 @@ void GodotGeneric6DOFJoint3D::solve(real_t p_timestep) {
 	Vector3 linear_axis;
 	for (i = 0; i < 3; i++) {
 		jacDiagABInv = real_t(1.) / m_jacLinear[i].getDiagonal();
+		//DEBUG("axis %d: jacobian: %f", i, jacDiagABInv);
 
 		if (m_useLinearReferenceFrameA) {
 			linear_axis = m_calculatedTransformA.basis.get_column(i);
@@ -445,175 +633,182 @@ void GodotGeneric6DOFJoint3D::calcAnchorPos() {
 void GodotGeneric6DOFJoint3D::set_param(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisParam p_param, real_t p_value) {
 	ERR_FAIL_INDEX(p_axis, 3);
 	switch (p_param) {
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_LOWER_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_LOWER_LIMIT:
 			m_linearLimits.m_lowerLimit[p_axis] = p_value;
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_UPPER_LIMIT: {
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_UPPER_LIMIT:
 			m_linearLimits.m_upperLimit[p_axis] = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_LIMIT_SOFTNESS: {
+		/*
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_LIMIT_SOFTNESS:
 			m_linearLimits.m_limitSoftness[p_axis] = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_RESTITUTION: {
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_RESTITUTION:
 			m_linearLimits.m_restitution[p_axis] = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_DAMPING: {
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_DAMPING:
 			m_linearLimits.m_damping[p_axis] = p_value;
+			break;
+		*/
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_LOWER_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_TARGET_VELOCITY:
+			m_linearLimits.m_targetVelocity[p_axis] = p_value;
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_FORCE_LIMIT:
+			m_linearLimits.m_maxMotorForce[p_axis] = p_value;
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_STIFFNESS:
+			m_linearLimits.m_springStiffness[p_axis] = p_value;
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_DAMPING:
+			m_linearLimits.m_springDamping[p_axis] = p_value;
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_EQUILIBRIUM_POINT:
+			m_linearLimits.m_springEquilibrium[p_axis] = p_value;
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_LOWER_LIMIT:
 			m_angularLimits[p_axis].m_loLimit = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_UPPER_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_UPPER_LIMIT:
 			m_angularLimits[p_axis].m_hiLimit = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_LIMIT_SOFTNESS: {
+		/*
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_LIMIT_SOFTNESS:
 			m_angularLimits[p_axis].m_limitSoftness = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_DAMPING: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_DAMPING:
 			m_angularLimits[p_axis].m_damping = p_value;
+			break;
+		*/
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_RESTITUTION: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_RESTITUTION:
 			m_angularLimits[p_axis].m_bounce = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_FORCE_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_FORCE_LIMIT:
 			m_angularLimits[p_axis].m_maxLimitForce = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_ERP: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_ERP:
 			m_angularLimits[p_axis].m_ERP = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_MOTOR_TARGET_VELOCITY: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_MOTOR_TARGET_VELOCITY:
 			m_angularLimits[p_axis].m_targetVelocity = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_MOTOR_FORCE_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_MOTOR_FORCE_LIMIT:
 			m_angularLimits[p_axis].m_maxLimitForce = p_value;
+			break;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_TARGET_VELOCITY: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_FORCE_LIMIT: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_STIFFNESS: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_DAMPING: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_EQUILIBRIUM_POINT: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_STIFFNESS: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_DAMPING: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_EQUILIBRIUM_POINT: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_MAX:
-			break; // Can't happen, but silences warning
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_STIFFNESS:
+			m_angularLimits[p_axis].m_springStiffness = p_value;
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_DAMPING:
+			m_angularLimits[p_axis].m_springDamping = p_value;
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_EQUILIBRIUM_POINT:
+			m_angularLimits[p_axis].m_springEquilibrium = p_value;
+			break;
+
+		default:
+			WARN_DEPRECATED_MSG("The parameter " + itos(p_param) + " is deprecated.");
+			break;
 	}
 }
 
 real_t GodotGeneric6DOFJoint3D::get_param(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisParam p_param) const {
 	ERR_FAIL_INDEX_V(p_axis, 3, 0);
 	switch (p_param) {
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_LOWER_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_LOWER_LIMIT:
 			return m_linearLimits.m_lowerLimit[p_axis];
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_UPPER_LIMIT: {
+
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_UPPER_LIMIT:
 			return m_linearLimits.m_upperLimit[p_axis];
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_LIMIT_SOFTNESS: {
+		/*
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_LIMIT_SOFTNESS:
 			return m_linearLimits.m_limitSoftness[p_axis];
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_RESTITUTION: {
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_RESTITUTION:
 			return m_linearLimits.m_restitution[p_axis];
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_DAMPING: {
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_DAMPING:
 			return m_linearLimits.m_damping[p_axis];
+		*/
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_LOWER_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_LOWER_LIMIT:
 			return m_angularLimits[p_axis].m_loLimit;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_UPPER_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_UPPER_LIMIT:
 			return m_angularLimits[p_axis].m_hiLimit;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_LIMIT_SOFTNESS: {
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_TARGET_VELOCITY:
+			return m_linearLimits.m_targetVelocity[p_axis];
+
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_FORCE_LIMIT:
+			return m_linearLimits.m_maxMotorForce[p_axis];
+
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_STIFFNESS:
+			return m_linearLimits.m_springStiffness[p_axis];
+
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_DAMPING:
+			return m_linearLimits.m_springDamping[p_axis];
+
+		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_EQUILIBRIUM_POINT:
+			return m_linearLimits.m_springEquilibrium[p_axis];
+
+		/*
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_LIMIT_SOFTNESS:
 			return m_angularLimits[p_axis].m_limitSoftness;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_DAMPING: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_DAMPING:
 			return m_angularLimits[p_axis].m_damping;
+		*/
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_RESTITUTION: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_RESTITUTION:
 			return m_angularLimits[p_axis].m_bounce;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_FORCE_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_FORCE_LIMIT:
 			return m_angularLimits[p_axis].m_maxLimitForce;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_ERP: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_ERP:
 			return m_angularLimits[p_axis].m_ERP;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_MOTOR_TARGET_VELOCITY: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_MOTOR_TARGET_VELOCITY:
 			return m_angularLimits[p_axis].m_targetVelocity;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_MOTOR_FORCE_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_MOTOR_FORCE_LIMIT:
 			return m_angularLimits[p_axis].m_maxMotorForce;
 
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_TARGET_VELOCITY: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_MOTOR_FORCE_LIMIT: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_STIFFNESS: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_DAMPING: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_LINEAR_SPRING_EQUILIBRIUM_POINT: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_STIFFNESS: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_DAMPING: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_EQUILIBRIUM_POINT: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_MAX:
-			break; // Can't happen, but silences warning
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_STIFFNESS:
+			return m_angularLimits[p_axis].m_springStiffness;
+
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_DAMPING:
+			return m_angularLimits[p_axis].m_springDamping;
+
+		case PhysicsServer3D::G6DOF_JOINT_ANGULAR_SPRING_EQUILIBRIUM_POINT:
+			return m_angularLimits[p_axis].m_springEquilibrium;
+
+		default:
+			WARN_DEPRECATED_MSG("The parameter " + itos(p_param) + " is deprecated.");
+			break;
 	}
+
 	return 0;
 }
 
@@ -621,52 +816,61 @@ void GodotGeneric6DOFJoint3D::set_flag(Vector3::Axis p_axis, PhysicsServer3D::G6
 	ERR_FAIL_INDEX(p_axis, 3);
 
 	switch (p_flag) {
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_LIMIT:
 			m_linearLimits.enable_limit[p_axis] = p_value;
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_LIMIT: {
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_LIMIT:
 			m_angularLimits[p_axis].m_enableLimit = p_value;
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_MOTOR: {
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_MOTOR:
 			m_angularLimits[p_axis].m_enableMotor = p_value;
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_MOTOR: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_SPRING: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_SPRING: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_MAX:
-			break; // Can't happen, but silences warning
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_MOTOR:
+			DEBUG("%sabling linear motor for axis %d", p_value ? "en" : "dis", p_axis);
+			m_linearLimits.m_enableMotor[p_axis] = p_value;
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_SPRING:
+			m_linearLimits.m_enableSpring[p_axis] = p_value;
+			break;
+
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_SPRING:
+			m_angularLimits[p_axis].m_enableSpring = p_value;
+			break;
+
+		default:
+			WARN_DEPRECATED_MSG("The flag " + itos(p_flag) + " is deprecated.");
+			break;
 	}
 }
 
 bool GodotGeneric6DOFJoint3D::get_flag(Vector3::Axis p_axis, PhysicsServer3D::G6DOFJointAxisFlag p_flag) const {
 	ERR_FAIL_INDEX_V(p_axis, 3, 0);
 	switch (p_flag) {
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_LIMIT: {
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_LIMIT:
 			return m_linearLimits.enable_limit[p_axis];
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_LIMIT: {
+
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_LIMIT:
 			return m_angularLimits[p_axis].m_enableLimit;
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_MOTOR: {
+
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_MOTOR:
 			return m_angularLimits[p_axis].m_enableMotor;
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_MOTOR: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_SPRING: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_SPRING: {
-			// Not implemented in GodotPhysics3D backend
-		} break;
-		case PhysicsServer3D::G6DOF_JOINT_FLAG_MAX:
-			break; // Can't happen, but silences warning
+
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_MOTOR:
+			return m_linearLimits.m_enableMotor[p_axis];
+
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_SPRING:
+			return m_linearLimits.m_enableSpring[p_axis];
+
+		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_ANGULAR_SPRING:
+			return m_angularLimits[p_axis].m_enableSpring;
+
+		default:
+			WARN_DEPRECATED_MSG("The flag " + itos(p_flag) + " is deprecated.");
+			break;
 	}
 
 	return false;
