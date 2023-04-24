@@ -85,11 +85,9 @@ int GodotG6DOFRotationalLimitMotor3D::testLimitValue(real_t test_value) {
 
 real_t GodotG6DOFRotationalLimitMotor3D::solveAngularLimits(
 		real_t timeStep, Vector3 &axis, real_t jacDiagABInv,
-		GodotBody3D *body0, GodotBody3D *body1, bool p_body0_dynamic, bool p_body1_dynamic) {
-	Vector3 angularLimit(0.0, 0.0, 0.0);
-	Vector3 motorImpulse(0.0, 0.0, 0.0);
-	// clip correction impulse
-	real_t clippedMotorImpulse;
+		GodotBody3D *body0, GodotBody3D *body1, bool p_body0_dynamic, bool p_body1_dynamic)
+{
+	real_t motorImpulse = 0.0;
 
 	if (!needApplyTorques()) {
 		return 0.0f;
@@ -123,30 +121,12 @@ real_t GodotG6DOFRotationalLimitMotor3D::solveAngularLimits(
 		}
 
 		// correction impulse
-		real_t unclippedMotorImpulse = (1 + m_bounce) * motor_relvel * jacDiagABInv;
-
-		///@todo: should clip against accumulated impulse
-		if (unclippedMotorImpulse > 0.0f) {
-			clippedMotorImpulse = unclippedMotorImpulse > maxMotorForce ? maxMotorForce : unclippedMotorImpulse;
-		} else {
-			clippedMotorImpulse = unclippedMotorImpulse < -maxMotorForce ? -maxMotorForce : unclippedMotorImpulse;
-		}
-
-		// sort with accumulated impulses
-		real_t lo = real_t(-1e30);
-		real_t hi = real_t(1e30);
-
-		real_t oldaccumImpulse = m_accumulatedImpulse;
-		real_t sum = oldaccumImpulse + clippedMotorImpulse;
-		m_accumulatedImpulse = sum > hi ? real_t(0.) : (sum < lo ? real_t(0.) : sum);
-
-		clippedMotorImpulse = m_accumulatedImpulse - oldaccumImpulse;
-
-		angularLimit = clippedMotorImpulse * axis;
+		motorImpulse = (1 + m_bounce) * motor_relvel * jacDiagABInv;
 	}
 
 	if (m_enableMotor) {
-		real_t k = 1.0f / (body0->compute_angular_impulse_denominator(axis) + body1->compute_angular_impulse_denominator(axis));
+		real_t k = 1.0f / (body0->compute_angular_impulse_denominator(axis) +
+				   body1->compute_angular_impulse_denominator(axis));
 
 		const Vector3 &angVelA = body0->get_angular_velocity();
 		const Vector3 &angVelB = body1->get_angular_velocity();
@@ -160,22 +140,34 @@ real_t GodotG6DOFRotationalLimitMotor3D::solveAngularLimits(
 		real_t desiredMotorVel = m_targetVelocity;
 		real_t motor_relvel = desiredMotorVel - projRelVel;
 
-		real_t unclippedMotorImpulse = k * motor_relvel;
-		// TODO: should clip against accumulated impulse
-		clippedMotorImpulse = unclippedMotorImpulse > m_maxMotorForce ? m_maxMotorForce : unclippedMotorImpulse;
-		clippedMotorImpulse = clippedMotorImpulse < -m_maxMotorForce ? -m_maxMotorForce : clippedMotorImpulse;
-		motorImpulse = clippedMotorImpulse * axis;
+		motorImpulse += k * motor_relvel;
+	}
+
+	// sort with accumulated impulses
+	real_t lo = real_t(-1e30);
+	real_t hi = real_t(1e30);
+
+	real_t oldaccumImpulse = m_accumulatedImpulse;
+	real_t sum = oldaccumImpulse + motorImpulse;
+	m_accumulatedImpulse = sum > hi ? 0.0 : (sum < lo ? 0.0 : sum);
+
+	motorImpulse = m_accumulatedImpulse - oldaccumImpulse;
+
+	if (motorImpulse > 0.0f) {
+		motorImpulse = motorImpulse > m_maxMotorForce ? m_maxMotorForce : motorImpulse;
+	} else {
+		motorImpulse = motorImpulse < -m_maxMotorForce ? -m_maxMotorForce : motorImpulse;
 	}
 
 	if (p_body0_dynamic) {
-		body0->apply_torque_impulse(motorImpulse + angularLimit);
+		body0->apply_torque_impulse(motorImpulse * axis);
 	}
 
 	if (body1 && p_body1_dynamic) {
-		body1->apply_torque_impulse(-motorImpulse - angularLimit);
+		body1->apply_torque_impulse(-motorImpulse * axis);
 	}
 
-	return clippedMotorImpulse;
+	return motorImpulse;
 }
 
 //////////////////////////// GodotG6DOFTranslationalLimitMotor3D ////////////////////////////////////
