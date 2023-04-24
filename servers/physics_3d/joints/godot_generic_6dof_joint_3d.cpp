@@ -86,6 +86,8 @@ int GodotG6DOFRotationalLimitMotor3D::testLimitValue(real_t test_value) {
 real_t GodotG6DOFRotationalLimitMotor3D::solveAngularLimits(
 		real_t timeStep, Vector3 &axis, real_t jacDiagABInv,
 		GodotBody3D *body0, GodotBody3D *body1, bool p_body0_dynamic, bool p_body1_dynamic) {
+	Vector3 angularLimit(0.0, 0.0, 0.0);
+	Vector3 motorImpulse(0.0, 0.0, 0.0);
 	// clip correction impulse
 	real_t clippedMotorImpulse;
 
@@ -140,33 +142,20 @@ real_t GodotG6DOFRotationalLimitMotor3D::solveAngularLimits(
 
 		clippedMotorImpulse = m_accumulatedImpulse - oldaccumImpulse;
 
-		Vector3 motorImp = clippedMotorImpulse * axis;
-
-		if (p_body0_dynamic) {
-			body0->apply_torque_impulse(motorImp);
-		}
-		if (body1 && p_body1_dynamic) {
-			body1->apply_torque_impulse(-motorImp);
-		}
+		angularLimit = clippedMotorImpulse * axis;
 	}
 
 	if (m_enableMotor) {
-		// TODO: add limits too
-		Vector3 angularLimit(0.0, 0.0, 0.0);
-
-		Vector3 axisA = axis; //body0->get_transform().basis.xform(m_rbAFrame.basis.get_column(2));
-		Vector3 axisB = axis; //body1->get_transform().basis.xform(m_rbBFrame.basis.get_column(2));
-
-		real_t k = 1.0f / (body0->compute_angular_impulse_denominator(axisA) + body1->compute_angular_impulse_denominator(axisA));
+		real_t k = 1.0f / (body0->compute_angular_impulse_denominator(axis) + body1->compute_angular_impulse_denominator(axis));
 
 		const Vector3 &angVelA = body0->get_angular_velocity();
 		const Vector3 &angVelB = body1->get_angular_velocity();
 
-		Vector3 angVelAroundHingeAxisA = axisA * axisA.dot(angVelA);
-		Vector3 angVelAroundHingeAxisB = axisB * axisB.dot(angVelB);
+		Vector3 angVelAroundHingeAxisA = axis * axis.dot(angVelA);
+		Vector3 angVelAroundHingeAxisB = axis * axis.dot(angVelB);
 
 		Vector3 velrel = angVelAroundHingeAxisA - angVelAroundHingeAxisB;
-		real_t projRelVel = velrel.dot(axisA);
+		real_t projRelVel = velrel.dot(axis);
 
 		real_t desiredMotorVel = m_targetVelocity;
 		real_t motor_relvel = desiredMotorVel - projRelVel;
@@ -175,15 +164,15 @@ real_t GodotG6DOFRotationalLimitMotor3D::solveAngularLimits(
 		// TODO: should clip against accumulated impulse
 		clippedMotorImpulse = unclippedMotorImpulse > m_maxMotorForce ? m_maxMotorForce : unclippedMotorImpulse;
 		clippedMotorImpulse = clippedMotorImpulse < -m_maxMotorForce ? -m_maxMotorForce : clippedMotorImpulse;
-		Vector3 motorImpulse = clippedMotorImpulse * axisA;
+		motorImpulse = clippedMotorImpulse * axis;
+	}
 
-		if (p_body0_dynamic) {
-			body0->apply_torque_impulse(motorImpulse + angularLimit);
-		}
+	if (p_body0_dynamic) {
+		body0->apply_torque_impulse(motorImpulse + angularLimit);
+	}
 
-		if (p_body1_dynamic) {
-			body1->apply_torque_impulse(-motorImpulse - angularLimit);
-		}
+	if (body1 && p_body1_dynamic) {
+		body1->apply_torque_impulse(-motorImpulse - angularLimit);
 	}
 
 	return clippedMotorImpulse;
@@ -605,14 +594,12 @@ void GodotGeneric6DOFJoint3D::solve(real_t p_timestep) {
 	Vector3 angular_axis;
 	real_t angularJacDiagABInv;
 	for (i = 0; i < 3; i++) {
-		//if (m_angularLimits[i].m_enableLimit && m_angularLimits[i].needApplyTorques()) {
-			// get axis
-			angular_axis = getAxis(i);
+		// get axis
+		angular_axis = getAxis(i);
 
-			angularJacDiagABInv = real_t(1.) / m_jacAng[i].getDiagonal();
+		angularJacDiagABInv = real_t(1.) / m_jacAng[i].getDiagonal();
 
-			m_angularLimits[i].solveAngularLimits(m_timeStep, angular_axis, angularJacDiagABInv, A, B, dynamic_A, dynamic_B);
-		//}
+		m_angularLimits[i].solveAngularLimits(m_timeStep, angular_axis, angularJacDiagABInv, A, B, dynamic_A, dynamic_B);
 	}
 
 	// linear
