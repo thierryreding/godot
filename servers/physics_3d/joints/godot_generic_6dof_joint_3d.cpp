@@ -86,66 +86,104 @@ int GodotG6DOFRotationalLimitMotor3D::testLimitValue(real_t test_value) {
 real_t GodotG6DOFRotationalLimitMotor3D::solveAngularLimits(
 		real_t timeStep, Vector3 &axis, real_t jacDiagABInv,
 		GodotBody3D *body0, GodotBody3D *body1, bool p_body0_dynamic, bool p_body1_dynamic) {
+	// clip correction impulse
+	real_t clippedMotorImpulse;
+
 	if (!needApplyTorques()) {
 		return 0.0f;
 	}
 
-	real_t target_velocity = m_targetVelocity;
-	real_t maxMotorForce = m_maxMotorForce;
+	if (m_enableLimit) {
+		real_t target_velocity = m_targetVelocity;
+		real_t maxMotorForce = m_maxMotorForce;
 
-	//current error correction
-	if (m_currentLimit != 0) {
-		target_velocity = -m_ERP * m_currentLimitError / (timeStep);
-		maxMotorForce = m_maxLimitForce;
+		//current error correction
+		if (m_currentLimit != 0) {
+			target_velocity = -m_ERP * m_currentLimitError / (timeStep);
+			maxMotorForce = m_maxLimitForce;
+		}
+
+		maxMotorForce *= timeStep;
+
+		// current velocity difference
+		Vector3 vel_diff = body0->get_angular_velocity();
+		if (body1) {
+			vel_diff -= body1->get_angular_velocity();
+		}
+
+		real_t rel_vel = axis.dot(vel_diff);
+
+		// correction velocity
+		real_t motor_relvel = m_limitSoftness * (target_velocity - m_damping * rel_vel);
+
+		if (Math::is_zero_approx(motor_relvel)) {
+			return 0.0f; //no need for applying force
+		}
+
+		// correction impulse
+		real_t unclippedMotorImpulse = (1 + m_bounce) * motor_relvel * jacDiagABInv;
+
+		///@todo: should clip against accumulated impulse
+		if (unclippedMotorImpulse > 0.0f) {
+			clippedMotorImpulse = unclippedMotorImpulse > maxMotorForce ? maxMotorForce : unclippedMotorImpulse;
+		} else {
+			clippedMotorImpulse = unclippedMotorImpulse < -maxMotorForce ? -maxMotorForce : unclippedMotorImpulse;
+		}
+
+		// sort with accumulated impulses
+		real_t lo = real_t(-1e30);
+		real_t hi = real_t(1e30);
+
+		real_t oldaccumImpulse = m_accumulatedImpulse;
+		real_t sum = oldaccumImpulse + clippedMotorImpulse;
+		m_accumulatedImpulse = sum > hi ? real_t(0.) : (sum < lo ? real_t(0.) : sum);
+
+		clippedMotorImpulse = m_accumulatedImpulse - oldaccumImpulse;
+
+		Vector3 motorImp = clippedMotorImpulse * axis;
+
+		if (p_body0_dynamic) {
+			body0->apply_torque_impulse(motorImp);
+		}
+		if (body1 && p_body1_dynamic) {
+			body1->apply_torque_impulse(-motorImp);
+		}
 	}
 
-	maxMotorForce *= timeStep;
+	if (m_enableMotor) {
+		// TODO: add limits too
+		Vector3 angularLimit(0.0, 0.0, 0.0);
 
-	// current velocity difference
-	Vector3 vel_diff = body0->get_angular_velocity();
-	if (body1) {
-		vel_diff -= body1->get_angular_velocity();
-	}
+		Vector3 axisA = axis; //body0->get_transform().basis.xform(m_rbAFrame.basis.get_column(2));
+		Vector3 axisB = axis; //body1->get_transform().basis.xform(m_rbBFrame.basis.get_column(2));
 
-	real_t rel_vel = axis.dot(vel_diff);
+		real_t k = 1.0f / (body0->compute_angular_impulse_denominator(axisA) + body1->compute_angular_impulse_denominator(axisA));
 
-	// correction velocity
-	real_t motor_relvel = m_limitSoftness * (target_velocity - m_damping * rel_vel);
+		const Vector3 &angVelA = body0->get_angular_velocity();
+		const Vector3 &angVelB = body1->get_angular_velocity();
 
-	if (Math::is_zero_approx(motor_relvel)) {
-		return 0.0f; //no need for applying force
-	}
+		Vector3 angVelAroundHingeAxisA = axisA * axisA.dot(angVelA);
+		Vector3 angVelAroundHingeAxisB = axisB * axisB.dot(angVelB);
 
-	// correction impulse
-	real_t unclippedMotorImpulse = (1 + m_bounce) * motor_relvel * jacDiagABInv;
+		Vector3 velrel = angVelAroundHingeAxisA - angVelAroundHingeAxisB;
+		real_t projRelVel = velrel.dot(axisA);
 
-	// clip correction impulse
-	real_t clippedMotorImpulse;
+		real_t desiredMotorVel = m_targetVelocity;
+		real_t motor_relvel = desiredMotorVel - projRelVel;
 
-	///@todo: should clip against accumulated impulse
-	if (unclippedMotorImpulse > 0.0f) {
-		clippedMotorImpulse = unclippedMotorImpulse > maxMotorForce ? maxMotorForce : unclippedMotorImpulse;
-	} else {
-		clippedMotorImpulse = unclippedMotorImpulse < -maxMotorForce ? -maxMotorForce : unclippedMotorImpulse;
-	}
+		real_t unclippedMotorImpulse = k * motor_relvel;
+		// TODO: should clip against accumulated impulse
+		clippedMotorImpulse = unclippedMotorImpulse > m_maxMotorForce ? m_maxMotorForce : unclippedMotorImpulse;
+		clippedMotorImpulse = clippedMotorImpulse < -m_maxMotorForce ? -m_maxMotorForce : clippedMotorImpulse;
+		Vector3 motorImpulse = clippedMotorImpulse * axisA;
 
-	// sort with accumulated impulses
-	real_t lo = real_t(-1e30);
-	real_t hi = real_t(1e30);
+		if (p_body0_dynamic) {
+			body0->apply_torque_impulse(motorImpulse + angularLimit);
+		}
 
-	real_t oldaccumImpulse = m_accumulatedImpulse;
-	real_t sum = oldaccumImpulse + clippedMotorImpulse;
-	m_accumulatedImpulse = sum > hi ? real_t(0.) : (sum < lo ? real_t(0.) : sum);
-
-	clippedMotorImpulse = m_accumulatedImpulse - oldaccumImpulse;
-
-	Vector3 motorImp = clippedMotorImpulse * axis;
-
-	if (p_body0_dynamic) {
-		body0->apply_torque_impulse(motorImp);
-	}
-	if (body1 && p_body1_dynamic) {
-		body1->apply_torque_impulse(-motorImp);
+		if (p_body1_dynamic) {
+			body1->apply_torque_impulse(-motorImpulse - angularLimit);
+		}
 	}
 
 	return clippedMotorImpulse;
@@ -567,14 +605,14 @@ void GodotGeneric6DOFJoint3D::solve(real_t p_timestep) {
 	Vector3 angular_axis;
 	real_t angularJacDiagABInv;
 	for (i = 0; i < 3; i++) {
-		if (m_angularLimits[i].m_enableLimit && m_angularLimits[i].needApplyTorques()) {
+		//if (m_angularLimits[i].m_enableLimit && m_angularLimits[i].needApplyTorques()) {
 			// get axis
 			angular_axis = getAxis(i);
 
 			angularJacDiagABInv = real_t(1.) / m_jacAng[i].getDiagonal();
 
 			m_angularLimits[i].solveAngularLimits(m_timeStep, angular_axis, angularJacDiagABInv, A, B, dynamic_A, dynamic_B);
-		}
+		//}
 	}
 
 	// linear
@@ -829,7 +867,7 @@ void GodotGeneric6DOFJoint3D::set_flag(Vector3::Axis p_axis, PhysicsServer3D::G6
 			break;
 
 		case PhysicsServer3D::G6DOF_JOINT_FLAG_ENABLE_LINEAR_MOTOR:
-			DEBUG("%sabling linear motor for axis %d", p_value ? "en" : "dis", p_axis);
+			//DEBUG("%sabling linear motor for axis %d", p_value ? "en" : "dis", p_axis);
 			m_linearLimits.m_enableMotor[p_axis] = p_value;
 			break;
 
